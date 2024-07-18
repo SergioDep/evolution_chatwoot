@@ -1,15 +1,15 @@
-version: '3'
+version: "3"
 
 services:
   base: &base
     image: chatwoot/chatwoot:latest
     container_name: chatwoot
     hostname: lchatwoot
-    env_file: .env 
-    stdin_open: true 
-    tty: true  
-    networks: 
-      - evolution-network     
+    env_file: .env
+    stdin_open: true
+    tty: true
+    networks:
+      - evolution-network
   rails:
     <<: *base
     container_name: chatwoot-rails
@@ -17,13 +17,15 @@ services:
     depends_on:
       - postgres
       - redis
+      # - mongodb
+      - rabbitmq
     environment:
       - NODE_ENV=production
       - RAILS_ENV=production
-    networks: 
+    networks:
       - evolution-network
     entrypoint: docker/entrypoints/rails.sh
-    command: ['bundle', 'exec', 'rails', 's', '-p', '3000', '-b', '0.0.0.0']
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
 
   sidekiq:
     <<: *base
@@ -35,10 +37,10 @@ services:
     environment:
       - NODE_ENV=production
       - RAILS_ENV=production
-    networks: 
+    networks:
       - evolution-network
     restart: unless-stopped
-    command: ['bundle', 'exec', 'sidekiq', '-C', 'config/sidekiq.yml']
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
 
   postgres:
     image: postgres:12
@@ -48,12 +50,12 @@ services:
     volumes:
       - ./chatwoot/data/postgres:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=chatwoot
+      - POSTGRES_DB=chatwoot_production
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=chatwoot
-    networks: 
+    networks:
       - evolution-network
-  
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: chatwoot-pgadmin4
@@ -71,31 +73,44 @@ services:
     container_name: chatwoot-redis
     hostname: chatwoot-redis
     restart: always
-    command: ["sh", "-c", "redis-server --requirepass \"$REDIS_PASSWORD\""]
+    command: ["sh", "-c", 'redis-server --requirepass "$REDIS_PASSWORD"']
     env_file: .env
     volumes:
       - ./chatwoot/data/redis:/data
-    networks: 
+    networks:
       - evolution-network
-  
+
   evolution-api:
-    build: 
-      context: ./evolution-api
-      dockerfile: Dockerfile
-    container_name: evolution-api
-    image: atendai/evolution-api
-    restart: always
+    image: atendai/evolution-api:v2.0.1-beta
     volumes:
-      - ./evolution-api/evolution_instances:/evolution/instances
-      - ./evolution-api/evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
     env_file:
       - ./evolution-api/Docker/.env
-    command: ['node', './dist/src/main.js']
-    networks: 
+    networks:
+      - evolution-network
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  rabbitmq:
+    image: rabbitmq:management
+    entrypoint: docker-entrypoint.sh
+    command: rabbitmq-server
+    hostname: rabbitmq
+    volumes:
+      - ./chatwoot/data/rabbitmq:/var/lib/rabbitmq/
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=admin
+      - RABBITMQ_DEFAULT_VHOST=default
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    networks:
       - evolution-network
 
   nginx:
-    build: 
+    build:
       context: ./nginx
       dockerfile: Dockerfile
     container_name: nginx
@@ -105,16 +120,28 @@ services:
       - "8081:8081" #Chatwoot
       - "8082:8082" #pgadmin
       - "8083:8083" #redis
-    networks: 
+      - "8084:8084" #rabbitmq
+    networks:
       - evolution-network
     depends_on:
       - evolution-api
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    user: root
+    command: tunnel run
+    environment:
+      - "TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}"
+    networks:
+      - evolution-network
+    restart: no
+
 volumes:
+  rabbitmq_data:
   evolution_instances:
   evolution_store:
 
-networks: 
+networks:
   evolution-network:
     name: evolution-network
     driver: bridge
